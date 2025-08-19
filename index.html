@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pizzeria — Suivi des ventes</title>
+    <meta name="theme-color" content="#111" />
+    <style>
+      :root { --bg:#f8f9fb; --card:#ffffff; --text:#111; --muted:#666; --border:#e6e8ef; --primary:#111; }
+      * { box-sizing: border-box; }
+      html,body,#root { height: 100%; margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color:var(--text); background:var(--bg); }
+      .app { padding: 20px; max-width: 1100px; margin: 0 auto; }
+      h1 { font-size: 22px; margin: 0 0 16px; }
+      .nav { display:flex; gap:8px; margin-bottom:16px; flex-wrap: wrap; }
+      .tabbtn { padding:10px 14px; border:1px solid var(--border); background:var(--card); border-radius:10px; cursor:pointer; }
+      .tabbtn.active { background:#111; color:#fff; border-color:#111; }
+      .row { display:grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+      .card { background: var(--card); border:1px solid var(--border); border-radius:16px; padding:14px; }
+      .card h3 { margin:0 0 10px; font-size:16px; }
+      .label { font-size:12px; color:var(--muted); margin-bottom:4px; display:block; }
+      .input, select, button { width: 100%; padding:10px; border:1px solid var(--border); border-radius:10px; background:#fff; }
+      button.primary { background:#111; color:#fff; border-color:#111; }
+      .right { display:flex; justify-content:flex-end; }
+      .table { width:100%; border-collapse: collapse; }
+      .table th, .table td { border-bottom:1px solid var(--border); padding:8px; font-size:14px; text-align:left; }
+      .badge { font-size:12px; padding:4px 8px; border-radius:999px; background:#f1f1f4; color:#444; display:inline-block; }
+      .stats { display:grid; grid-template-columns: repeat(auto-fit,minmax(160px,1fr)); gap:12px; }
+      .stat { background: var(--card); border:1px solid var(--border); border-radius:16px; padding:12px; }
+      .stat .label { margin:0; }
+      .stat .value { font-weight:600; font-size:18px; }
+      hr.sep { border:0; border-top:1px solid var(--border); margin:12px 0; }
+      .actions { display:flex; gap:8px; flex-wrap: wrap; }
+      .small { font-size:12px; color:var(--muted); }
+      .overflow { overflow:auto; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <!-- React & Babel from CDNs -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+    <script src="https://unpkg.com/recharts/umd/Recharts.min.js"></script>
+
+    <script type="text/babel">
+      const { useState, useMemo, useRef, useEffect } = React;
+      const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Legend } = Recharts;
+
+      const uid = () => Math.random().toString(36).slice(2);
+      const todayISO = () => new Date().toISOString().slice(0,10);
+      const fmtMoney = (n) => (Math.round((n||0)*100)/100).toFixed(2);
+      const startOfMonth = (d=new Date()) => new Date(d.getFullYear(), d.getMonth(), 1);
+      const endOfMonth = (d=new Date()) => new Date(d.getFullYear(), d.getMonth()+1, 0, 23,59,59,999);
+      const inRange = (date, start, end) => { const t = new Date(date).getTime(); return t>=start.getTime() && t<=end.getTime() };
+      const monthLabel = (d) => d.toLocaleDateString(undefined,{month:'short', year:'2-digit'});
+      const last12Months = () => { const arr=[]; const now=new Date(); for(let i=11;i>=0;i--){ const s=new Date(now.getFullYear(), now.getMonth()-i,1); const e=endOfMonth(s); arr.push({label:monthLabel(s), start:s, end:e}); } return arr; };
+
+      const DEFAULT_CATALOG = [
+        { id: uid(), type:'Pizza', name:'Margherita', price:8.0, category:'Classiques' },
+        { id: uid(), type:'Pizza', name:'Salame piquante', price:11.0, category:'Spéciales' },
+        { id: uid(), type:'Pizza', name:'Prosciutto di Parma', price:12.0, category:'Spéciales' },
+        { id: uid(), type:'Pizza', name:'Nutella', price:7.0, category:'Pizza dessert' },
+        { id: uid(), type:'Dessert', name:'Tiramisu café', price:5.0, category:'DESSERT' },
+        { id: uid(), type:'Dessert', name:'Tiramisu Nutella', price:5.5, category:'DESSERT' },
+        { id: uid(), type:'Dessert', name:'Tiramisu canistrelli', price:5.5, category:'DESSERT' },
+        { id: uid(), type:'Dessert', name:'Tiramisu limoncellu', price:5.5, category:'DESSERT' },
+        { id: uid(), type:'Boisson', name:'Coca', price:2.5, category:'Soda' },
+        { id: uid(), type:'Boisson', name:'Coca Zéro', price:2.5, category:'Soda' },
+        { id: uid(), type:'Boisson', name:'Orangina', price:2.5, category:'Soda' },
+        { id: uid(), type:'Boisson', name:'Liptonic', price:2.5, category:'Soda' },
+        { id: uid(), type:'Boisson', name:'Schweppes Agrumes', price:2.5, category:'Soda' },
+        { id: uid(), type:'Boisson', name:'Ice Tea', price:2.5, category:'Soda' },
+        { id: uid(), type:'Boisson', name:'Eau', price:1.5, category:'Eau' },
+        { id: uid(), type:'Boisson', name:'Orezza', price:2.0, category:'Eau gazeuse' },
+      ];
+
+      function useLocalState(key, initial){
+        const [value, setValue] = useState(()=>{
+          try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : initial } catch { return initial }
+        });
+        useEffect(()=>{ try { localStorage.setItem(key, JSON.stringify(value)) } catch {} }, [key, value]);
+        return [value, setValue];
+      }
+
+      function App(){
+        const [tab, setTab] = useLocalState('ui.tab','pos');
+        const [catalog, setCatalog] = useLocalState('pizzeria.catalog.v1', DEFAULT_CATALOG);
+        const [sales, setSales] = useLocalState('pizzeria.sales.v1', []);
+
+        const [qsType, setQsType] = useState('Pizza');
+        const [qsProductId, setQsProductId] = useState('');
+        const [qsDate, setQsDate] = useState(todayISO());
+        const [qsQty, setQsQty] = useState(1);
+        const [qsDiscount, setQsDiscount] = useState(0);
+        const [qsPayment, setQsPayment] = useState('CB');
+        const [qsDelivery, setQsDelivery] = useState('');
+        const [qsZone, setQsZone] = useState('');
+
+        const [filterMonth, setFilterMonth] = useState(()=>todayISO().slice(0,7));
+        const monthStart = useMemo(()=>startOfMonth(new Date(filterMonth+'-01')), [filterMonth]);
+        const monthEnd = useMemo(()=>endOfMonth(new Date(filterMonth+'-01')), [filterMonth]);
+
+        const catalogByType = useMemo(()=> ({
+          Pizza: catalog.filter(c=>c.type==='Pizza'),
+          Dessert: catalog.filter(c=>c.type==='Dessert'),
+          Boisson: catalog.filter(c=>c.type==='Boisson'),
+        }), [catalog]);
+
+        const selectedProduct = useMemo(()=> catalog.find(c=>c.id===qsProductId) || null, [catalog, qsProductId]);
+        const qsUnitPrice = selectedProduct?.price ?? 0;
+        const qsTotal = Math.max(0, (qsQty||0) * (qsUnitPrice - (qsDiscount||0)));
+
+        // summaries
+        const thisMonthStart = startOfMonth(new Date());
+        const thisMonthEnd = endOfMonth(new Date());
+        const thisYearStart = new Date(new Date().getFullYear(),0,1);
+        const thisYearEnd = new Date(new Date().getFullYear(),11,31,23,59,59,999);
+
+        const monthSales = sales.filter(s=>inRange(s.date, thisMonthStart, thisMonthEnd));
+        const monthCA = monthSales.reduce((a,s)=>a+s.total,0);
+        const monthQty = monthSales.reduce((a,s)=>a+s.qty,0);
+        const yearSales = sales.filter(s=>inRange(s.date, thisYearStart, thisYearEnd));
+        const yearCA = yearSales.reduce((a,s)=>a+s.total,0);
+        const revByTypeMonth = React.useMemo(()=>{
+          const out = { Pizza:0, Dessert:0, Boisson:0 };
+          for(const s of monthSales) out[s.type] = (out[s.type]||0)+s.total;
+          return out;
+        }, [monthSales]);
+        const last12 = last12Months().map(({label,start,end})=>({ label, ca: sales.filter(s=>inRange(s.date,start,end)).reduce((a,s)=>a+s.total,0) }));
+
+        function addSale(){
+          if(!selectedProduct) return alert('Choisis un produit');
+          if(!qsQty || qsQty<1) return alert('Quantité invalide');
+          const sale = {
+            id: uid(),
+            date: qsDate,
+            type: selectedProduct.type,
+            productId: selectedProduct.id,
+            productName: selectedProduct.name,
+            qty: Number(qsQty),
+            unitPrice: Number(qsUnitPrice),
+            discount: Number(qsDiscount||0),
+            total: Math.max(0, Number(qsQty)*(Number(qsUnitPrice)-Number(qsDiscount||0))),
+            payment: qsPayment,
+            delivery: qsDelivery,
+            zone: qsZone
+          };
+          setSales(prev=>[sale, ...prev]);
+          setQsProductId(''); setQsQty(1); setQsDiscount(0); setQsZone('');
+        }
+        const deleteSale = (id)=> setSales(prev=>prev.filter(s=>s.id!==id));
+
+        const [newType, setNewType] = useState('Pizza');
+        const [newName, setNewName] = useState('');
+        const [newCat, setNewCat] = useState('');
+        const [newPrice, setNewPrice] = useState('');
+
+        function addProduct(e){
+          e.preventDefault();
+          if(!newName) return alert('Le nom est obligatoire');
+          const p = Number(newPrice); if(!(p>=0)) return alert('Prix invalide');
+          setCatalog(prev=>[{id:uid(), type:newType, name:newName, category:newCat, price:p}, ...prev]);
+          setNewName(''); setNewCat(''); setNewPrice('');
+        }
+        const deleteProduct = (id)=> setCatalog(prev=>prev.filter(c=>c.id!==id));
+
+        function exportJSON(){
+          const blob = new Blob([JSON.stringify({catalog, sales, exportedAt:new Date().toISOString()}, null, 2)], {type:'application/json'});
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `pizzeria-data-${todayISO()}.json`;
+          document.body.appendChild(a); a.click(); a.remove();
+          URL.revokeObjectURL(url);
+        }
+        const fileRef = useRef();
+        function importJSON(file){
+          if(!file) return;
+          const reader = new FileReader();
+          reader.onload = () => {
+            try {
+              const data = JSON.parse(reader.result);
+              if(Array.isArray(data.catalog)) setCatalog(data.catalog);
+              if(Array.isArray(data.sales)) setSales(data.sales);
+              alert('Import réussi ✅');
+            } catch(e){ alert('Fichier invalide'); }
+          };
+          reader.readAsText(file);
+        }
+
+        const monthSalesFiltered = sales.filter(s=>inRange(s.date, monthStart, monthEnd));
+        const totalMonthFiltered = monthSalesFiltered.reduce((a,s)=>a+s.total,0);
+
+        return (
+          <div className="app">
+            <h1>Pizzeria — Suivi des ventes <span className="badge">Prototype</span></h1>
+
+            <div className="nav">
+              <button className={'tabbtn '+(tab==='pos'?'active':'')} onClick={()=>setTab('pos')}>Point de vente</button>
+              <button className={'tabbtn '+(tab==='dashboard'?'active':'')} onClick={()=>setTab('dashboard')}>Tableau de bord</button>
+              <button className={'tabbtn '+(tab==='sales'?'active':'')} onClick={()=>setTab('sales')}>Ventes</button>
+              <button className={'tabbtn '+(tab==='catalog'?'active':'')} onClick={()=>setTab('catalog')}>Catalogue</button>
+              <button className={'tabbtn '+(tab==='settings'?'active':'')} onClick={()=>setTab('settings')}>Paramètres</button>
+            </div>
+
+            {tab==='pos' && (
+              <div className="card">
+                <h3>Nouvelle vente</h3>
+                <div className="row">
+                  <div>
+                    <label className="label">Type</label>
+                    <select value={qsType} onChange={(e)=>{ setQsType(e.target.value); setQsProductId('') }}>
+                      <option>Pizza</option><option>Dessert</option><option>Boisson</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Produit</label>
+                    <select value={qsProductId} onChange={(e)=>setQsProductId(e.target.value)}>
+                      <option value="">— Sélectionner —</option>
+                      {catalogByType[qsType].map(p=>(<option key={p.id} value={p.id}>{p.name} — {fmtMoney(p.price)} €</option>))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Date</label>
+                    <input className="input" type="date" value={qsDate} onChange={(e)=>setQsDate(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="label">Quantité</label>
+                    <input className="input" type="number" min="1" value={qsQty} onChange={(e)=>setQsQty(Number(e.target.value))} />
+                  </div>
+                  <div>
+                    <label className="label">Remise (€)</label>
+                    <input className="input" type="number" min="0" step="0.1" value={qsDiscount} onChange={(e)=>setQsDiscount(Number(e.target.value)||0)} />
+                  </div>
+                  <div>
+                    <label className="label">Paiement</label>
+                    <select value={qsPayment} onChange={(e)=>setQsPayment(e.target.value)}>
+                      <option>CB</option><option>Espèces</option><option>TR</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Livraison</label>
+                    <select value={qsDelivery} onChange={(e)=>setQsDelivery(e.target.value)}>
+                      <option value="">—</option><option>À emporter</option><option>Livraison</option><option>Sur place</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Zone</label>
+                    <input className="input" value={qsZone} onChange={(e)=>setQsZone(e.target.value)} placeholder="ex: Furiani" />
+                  </div>
+                </div>
+
+                <hr className="sep" />
+
+                <div className="stats">
+                  <div className="stat"><div className="label">Prix unitaire</div><div className="value">{fmtMoney(qsUnitPrice)} €</div></div>
+                  <div className="stat"><div className="label">Quantité</div><div className="value">{qsQty}</div></div>
+                  <div className="stat"><div className="label">Remise</div><div className="value">{fmtMoney(qsDiscount)} €</div></div>
+                  <div className="stat"><div className="label">Total à encaisser</div><div className="value">{fmtMoney(qsTotal)} €</div></div>
+                </div>
+
+                <div className="right" style={{marginTop:12}}>
+                  <button className="primary" onClick={addSale}>Enregistrer la vente</button>
+                </div>
+              </div>
+            )}
+
+            {tab==='dashboard' && (
+              <div className="row">
+                <div className="stat"><div className="label">CA du mois</div><div className="value">{fmtMoney(monthCA)} €</div><div className="small">{monthSales.length} tickets</div></div>
+                <div className="stat"><div className="label">Articles vendus (mois)</div><div className="value">{monthQty}</div></div>
+                <div className="stat"><div className="label">CA de l'année</div><div className="value">{fmtMoney(yearCA)} €</div></div>
+                <div className="stat"><div className="label">Répartition (mois)</div><div className="value">
+                  {`${Math.round(100*(revByTypeMonth.Pizza/(monthCA||1)))}% P / ${Math.round(100*(revByTypeMonth.Dessert/(monthCA||1)))}% D / ${Math.round(100*(revByTypeMonth.Boisson/(monthCA||1)))}% B`}
+                </div></div>
+              </div>
+            )}
+
+            {tab==='dashboard' && (
+              <div className="card">
+                <h3>CA — 12 derniers mois</h3>
+                <div style={{height:260}}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={last12}>
+                      <XAxis dataKey="label" />
+                      <YAxis />
+                      <Tooltip formatter={(v)=>`${fmtMoney(v)} €`} />
+                      <Bar dataKey="ca" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+
+            {tab==='sales' && (
+              <>
+                <div className="card">
+                  <h3>Filtre du mois</h3>
+                  <div className="row">
+                    <div>
+                      <label className="label">Mois</label>
+                      <input className="input" type="month" value={filterMonth} onChange={(e)=>setFilterMonth(e.target.value)} />
+                    </div>
+                    <div className="stat"><div className="label">CA du mois</div><div className="value">{fmtMoney(totalMonthFiltered)} €</div></div>
+                    <div className="stat"><div className="label">Tickets</div><div className="value">{monthSalesFiltered.length}</div></div>
+                  </div>
+                </div>
+
+                <div className="card overflow">
+                  <h3>Ventes</h3>
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Date</th><th>Type</th><th>Produit</th><th style={{textAlign:'right'}}>PU (€)</th><th style={{textAlign:'right'}}>Qté</th><th style={{textAlign:'right'}}>Remise</th><th style={{textAlign:'right'}}>Total (€)</th><th>Paiement</th><th>Livraison</th><th>Zone</th><th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {monthSalesFiltered.length===0 && (<tr><td colSpan="11" style={{textAlign:'center', color:'#666'}}>Aucune vente sur la période.</td></tr>)}
+                      {monthSalesFiltered.map(s => (
+                        <tr key={s.id}>
+                          <td>{s.date}</td><td>{s.type}</td><td>{s.productName}</td>
+                          <td style={{textAlign:'right'}}>{fmtMoney(s.unitPrice)}</td>
+                          <td style={{textAlign:'right'}}>{s.qty}</td>
+                          <td style={{textAlign:'right'}}>{fmtMoney(s.discount)}</td>
+                          <td style={{textAlign:'right', fontWeight:600}}>{fmtMoney(s.total)}</td>
+                          <td>{s.payment}</td><td>{s.delivery||'—'}</td><td>{s.zone||'—'}</td>
+                          <td style={{textAlign:'right'}}><button onClick={()=>deleteSale(s.id)}>🗑️</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+
+            {tab==='catalog' && (
+              <>
+                <div className="card">
+                  <h3>Ajouter un produit</h3>
+                  <form onSubmit={(e)=>{ e.preventDefault(); addProduct(e); }} className="row">
+                    <div>
+                      <label className="label">Type</label>
+                      <select value={newType} onChange={(e)=>setNewType(e.target.value)}>
+                        <option>Pizza</option><option>Dessert</option><option>Boisson</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="label">Nom</label>
+                      <input className="input" value={newName} onChange={(e)=>setNewName(e.target.value)} placeholder="ex: Prosciutto di Parma" />
+                    </div>
+                    <div>
+                      <label className="label">Catégorie</label>
+                      <input className="input" value={newCat} onChange={(e)=>setNewCat(e.target.value)} placeholder="ex: Spéciales" />
+                    </div>
+                    <div>
+                      <label className="label">Prix (€)</label>
+                      <input className="input" type="number" min="0" step="0.1" value={newPrice} onChange={(e)=>setNewPrice(e.target.value)} />
+                    </div>
+                    <div className="right"><button className="primary" type="submit">Ajouter</button></div>
+                  </form>
+                </div>
+
+                <div className="card overflow">
+                  <h3>Catalogue</h3>
+                  <table className="table">
+                    <thead><tr><th>Type</th><th>Nom</th><th>Catégorie</th><th style={{textAlign:'right'}}>Prix (€)</th><th></th></tr></thead>
+                    <tbody>
+                      {catalog.length===0 && (<tr><td colSpan="5" style={{textAlign:'center', color:'#666'}}>Catalogue vide.</td></tr>)}
+                      {catalog.map(p => (
+                        <tr key={p.id}>
+                          <td>{p.type}</td><td><b>{p.name}</b></td><td>{p.category||'—'}</td><td style={{textAlign:'right'}}>{fmtMoney(p.price)}</td>
+                          <td style={{textAlign:'right'}}><button onClick={()=>deleteProduct(p.id)}>🗑️</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+
+            {tab==='settings' && (
+              <div className="card">
+                <h3>Sauvegarde & partage</h3>
+                <p className="small">Les données sont stockées <b>localement</b> sur l’appareil (localStorage). Utilise Exporter/Importer pour les transférer ou les mettre sur iCloud/Drive.</p>
+                <div className="actions">
+                  <button className="primary" onClick={exportJSON}>Exporter les données</button>
+                  <label className="tabbtn" style={{cursor:'pointer'}}>
+                    Importer
+                    <input ref={fileRef} type="file" accept="application/json" style={{display:'none'}} onChange={(e)=>importJSON(e.target.files?.[0])} />
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+  </body>
+</html>
